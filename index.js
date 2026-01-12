@@ -5,9 +5,11 @@ const crypto = require("crypto");
 const bodyParser = require("body-parser");
 const admin = require("firebase-admin");
 
-/* ---------------- FIREBASE ADMIN ---------------- */
+/* ---------------- FIREBASE ADMIN (CORRECT) ---------------- */
 admin.initializeApp({
-  credential: admin.credential.applicationDefault(),
+  credential: admin.credential.cert(
+    JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
+  ),
 });
 
 const db = admin.firestore();
@@ -15,10 +17,78 @@ const db = admin.firestore();
 /* ---------------- APP SETUP ---------------- */
 const app = express();
 app.use(cors());
-app.use(express.json());
 
-// ⚠️ RAW BODY ONLY FOR WEBHOOK (IMPORTANT)
-app.use("/webhook", bodyParser.raw({ type: "*/*" }));
+// ❌ DO NOT use express.json() before webhook
+app.use(
+  "/create-payment-link",
+  express.json({ limit: "1mb" })
+);
+
+// ✅ RAW BODY ONLY FOR WEBHOOK
+app.post(
+  "/webhook",
+  bodyParser.raw({ type: "*/*" }),
+  async (req, res) => {
+    try {
+      const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
+
+      const receivedSignature = req.headers["x-razorpay-signature"];
+      const expectedSignature = crypto
+        .createHmac("sha256", secret)
+        .update(req.body)
+        .digest("hex");
+
+      if (receivedSignature !== expectedSignature) {
+        console.error("❌ Invalid webhook signature");
+        return res.status(400).send("Invalid signature");
+      }
+
+      const event = JSON.parse(req.body.toString());
+
+      // ✅ PAYMENT LINK PAID
+      if (event.event === "payment_link.paid") {
+        const payment = event.payload.payment.entity;
+        const notes = payment.notes;
+
+        const uid = notes.uid;
+        const cartItemIds = JSON.parse(notes.cartItemIds || "[]");
+        const paymentLinkId = payment.payment_link_id;
+
+        // 🔥 DELETE PAID CART ITEMS
+        for (const id of cartItemIds) {
+          await db
+            .collection("users")
+            .doc(uid)
+            .collection("cart")
+            .doc(id)
+            .delete();
+        }
+
+        // 🔥 UPDATE ORDER USING paymentLinkId (SAFE)
+        const orderSnap = await db
+          .collection("users")
+          .doc(uid)
+          .collection("orders")
+          .where("paymentLinkId", "==", paymentLinkId)
+          .limit(1)
+          .get();
+
+        if (!orderSnap.empty) {
+          await orderSnap.docs[0].ref.update({
+            paymentStatus: "PAID",
+            razorpayPaymentId: payment.id,
+            paidAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        }
+      }
+
+      res.json({ status: "ok" });
+    } catch (err) {
+      console.error("Webhook error:", err);
+      res.status(500).send("Webhook error");
+    }
+  }
+);
 
 /* ---------------- RAZORPAY ---------------- */
 const razorpay = new Razorpay({
@@ -35,7 +105,6 @@ app.post("/create-payment-link", async (req, res) => {
       return res.status(400).json({ error: "Invalid request" });
     }
 
-    // 🔥 CREATE PAYMENT LINK
     const paymentLink = await razorpay.paymentLink.create({
       amount: amount * 100,
       currency: "INR",
@@ -69,70 +138,8 @@ app.post("/create-payment-link", async (req, res) => {
   }
 });
 
-/* ---------------- WEBHOOK ---------------- */
-app.post("/webhook", async (req, res) => {
-  try {
-    const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
-
-    const receivedSignature = req.headers["x-razorpay-signature"];
-    const expectedSignature = crypto
-      .createHmac("sha256", secret)
-      .update(req.body)
-      .digest("hex");
-
-    if (receivedSignature !== expectedSignature) {
-      console.error("Invalid webhook signature");
-      return res.status(400).send("Invalid signature");
-    }
-
-    const event = JSON.parse(req.body.toString());
-
-    // ✅ PAYMENT SUCCESS
-    if (event.event === "payment_link.paid") {
-      const payment = event.payload.payment.entity;
-      const notes = payment.notes;
-
-      const uid = notes.uid;
-      const cartItemIds = JSON.parse(notes.cartItemIds || "[]");
-
-      // 🔥 DELETE PAID CART ITEMS
-      for (const id of cartItemIds) {
-        await db
-          .collection("users")
-          .doc(uid)
-          .collection("cart")
-          .doc(id)
-          .delete();
-      }
-
-      // 🔥 UPDATE LATEST PENDING ORDER
-      const ordersSnap = await db
-        .collection("users")
-        .doc(uid)
-        .collection("orders")
-        .where("paymentStatus", "==", "PENDING")
-        .orderBy("createdAt", "desc")
-        .limit(1)
-        .get();
-
-      if (!ordersSnap.empty) {
-        await ordersSnap.docs[0].ref.update({
-          paymentStatus: "PAID",
-          razorpayPaymentId: payment.id,
-          paidAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-      }
-    }
-
-    res.json({ status: "ok" });
-  } catch (err) {
-    console.error("Webhook error:", err);
-    res.status(500).send("Webhook error");
-  }
-});
-
 /* ---------------- SERVER ---------------- */
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
+  console.log("✅ Server running on port", PORT);
 });
