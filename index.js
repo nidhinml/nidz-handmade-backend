@@ -5,9 +5,13 @@ const crypto = require("crypto");
 const bodyParser = require("body-parser");
 const admin = require("firebase-admin");
 
-/* ---------------- FIREBASE ADMIN ---------------- */
+/* ---------------- FIREBASE ADMIN (FIXED) ---------------- */
+const serviceAccount = JSON.parse(
+  Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT, "base64").toString("utf8")
+);
+
 admin.initializeApp({
-  credential: admin.credential.applicationDefault(),
+  credential: admin.credential.cert(serviceAccount),
 });
 
 const db = admin.firestore();
@@ -15,9 +19,9 @@ const db = admin.firestore();
 /* ---------------- APP SETUP ---------------- */
 const app = express();
 app.use(cors());
-app.use(express.json()); // ✅ ONLY JSON here
+app.use(express.json());
 
-/* ---------------- HEALTH CHECK (IMPORTANT) ---------------- */
+/* ---------------- HEALTH CHECK (CRITICAL) ---------------- */
 app.get("/", (req, res) => {
   res.send("Nidz Handmade Backend is running ✅");
 });
@@ -49,7 +53,6 @@ app.post("/create-payment-link", async (req, res) => {
       notify: { email: true },
     });
 
-    // 🔥 CREATE ORDER (PENDING)
     await db
       .collection("users")
       .doc(uid)
@@ -65,7 +68,7 @@ app.post("/create-payment-link", async (req, res) => {
 
     res.json({ url: paymentLink.short_url });
   } catch (err) {
-    console.error("Payment link error:", err);
+    console.error("Payment error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -97,7 +100,6 @@ app.post(
         const uid = notes.uid;
         const cartItemIds = JSON.parse(notes.cartItemIds || "[]");
 
-        // 🔥 DELETE PAID CART ITEMS
         for (const id of cartItemIds) {
           await db
             .collection("users")
@@ -107,7 +109,6 @@ app.post(
             .delete();
         }
 
-        // 🔥 UPDATE ORDER STATUS
         const orders = await db
           .collection("users")
           .doc(uid)
