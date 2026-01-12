@@ -42,47 +42,56 @@ const razorpay = new Razorpay({
 
 /* ================= CREATE PAYMENT LINK ================= */
 
-app.post("/create-payment-link", async (req, res) => {
-   console.log("🔥 Payment request received", req.body);
-  try {
-    const { amount, email, uid, cartItemIds, address, items } = req.body;
+// app.post("/create-payment-link", async (req, res) => {
+//    console.log("🔥 Payment request received", req.body);
+//   try {
+//     const { amount, email, uid, cartItemIds, address, items } = req.body;
 
-    if (!amount || !uid || !cartItemIds || cartItemIds.length === 0) {
-      return res.status(400).json({ error: "Invalid request" });
-    }
+//     if (!amount || !uid || !cartItemIds || cartItemIds.length === 0) {
+//       return res.status(400).json({ error: "Invalid request" });
+//     }
 
-    const paymentLink = await razorpay.paymentLink.create({
-      amount: amount * 100, // Razorpay expects paise
-      currency: "INR",
-      description: "Nidz Handmade Products",
-      customer: { email },
-      notes: {
-        uid,
-        cartItemIds: JSON.stringify(cartItemIds),
-      },
-      notify: { email: true },
-    });
+//     const paymentLink = await razorpay.paymentLink.create({
+//       amount: amount * 100, // Razorpay expects paise
+//       currency: "INR",
+//       description: "Nidz Handmade Products",
+//       customer: { email },
+//       notes: {
+//         uid,
+//         cartItemIds: JSON.stringify(cartItemIds),
+//       },
+//       notify: { email: true },
+//     });
 
-    // 🔥 Create order (PENDING)
-    await db
-      .collection("users")
-      .doc(uid)
-      .collection("orders")
-      .add({
-        items,
-        address,
-        totalAmount: amount,
-        paymentStatus: "PENDING",
-        paymentLinkId: paymentLink.id,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+//     // 🔥 Create order (PENDING)
+//     await db
+//       .collection("users")
+//       .doc(uid)
+//       .collection("orders")
+//       .add({
+//         items,
+//         address,
+//         totalAmount: amount,
+//         paymentStatus: "PENDING",
+//         paymentLinkId: paymentLink.id,
+//         createdAt: admin.firestore.FieldValue.serverTimestamp(),
+//       });
 
-    res.json({ url: paymentLink.short_url });
-  } catch (err) {
-    console.error("Create payment error:", err);
-    res.status(500).json({ error: err.message });
-  }
+//     res.json({ url: paymentLink.short_url });
+//   } catch (err) {
+//     console.error("Create payment error:", err);
+//     res.status(500).json({ error: err.message });
+//   }
+// });
+
+app.post("/create-payment-link", (req, res) => {
+  return res.json({
+    status: "ok",
+    message: "Backend is reachable",
+    body: req.body,
+  });
 });
+
 
 /* ================= WEBHOOK (RAW BODY ONLY) ================= */
 
