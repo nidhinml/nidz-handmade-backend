@@ -5,18 +5,9 @@ const crypto = require("crypto");
 const bodyParser = require("body-parser");
 const admin = require("firebase-admin");
 
-/* ================= FIREBASE ADMIN (FIXED) ================= */
-
-// ❗ DO NOT JSON.parse directly – decode Base64 first
-if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
-  throw new Error("FIREBASE_SERVICE_ACCOUNT env variable missing");
-}
-
+/* ---------- FIREBASE ADMIN ---------- */
 const serviceAccount = JSON.parse(
-  Buffer.from(
-    process.env.FIREBASE_SERVICE_ACCOUNT,
-    "base64"
-  ).toString("utf8")
+  process.env.FIREBASE_SERVICE_ACCOUNT
 );
 
 admin.initializeApp({
@@ -25,34 +16,31 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
-/* ================= APP SETUP ================= */
-
+/* ---------- APP SETUP ---------- */
 const app = express();
 app.use(cors());
+app.use(express.json());
 
-// ❌ Do NOT use express.json() globally (breaks webhook)
-app.use("/create-payment-link", express.json({ limit: "1mb" }));
+// RAW BODY ONLY FOR WEBHOOK
+app.use("/webhook", bodyParser.raw({ type: "*/*" }));
 
-/* ================= RAZORPAY ================= */
-
+/* ---------- RAZORPAY ---------- */
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-/* ================= CREATE PAYMENT LINK ================= */
-
+/* ---------- CREATE PAYMENT LINK ---------- */
 app.post("/create-payment-link", async (req, res) => {
-   console.log("🔥 Payment request received", req.body);
   try {
     const { amount, email, uid, cartItemIds, address, items } = req.body;
 
-    if (!amount || !uid || !cartItemIds || cartItemIds.length === 0) {
+    if (!amount || !uid || !cartItemIds?.length) {
       return res.status(400).json({ error: "Invalid request" });
     }
 
     const paymentLink = await razorpay.paymentLink.create({
-      amount: amount * 100, // Razorpay expects paise
+      amount: amount * 100,
       currency: "INR",
       description: "Nidz Handmade Products",
       customer: { email },
@@ -63,7 +51,6 @@ app.post("/create-payment-link", async (req, res) => {
       notify: { email: true },
     });
 
-    // 🔥 Create order (PENDING)
     await db
       .collection("users")
       .doc(uid)
@@ -84,85 +71,66 @@ app.post("/create-payment-link", async (req, res) => {
   }
 });
 
-app.post("/create-payment-link", (req, res) => {
-  return res.json({
-    status: "ok",
-    message: "Backend is reachable",
-    body: req.body,
-  });
-});
+/* ---------- WEBHOOK ---------- */
+app.post("/webhook", async (req, res) => {
+  try {
+    const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
 
+    const expectedSignature = crypto
+      .createHmac("sha256", secret)
+      .update(req.body)
+      .digest("hex");
 
-/* ================= WEBHOOK (RAW BODY ONLY) ================= */
+    const receivedSignature = req.headers["x-razorpay-signature"];
 
-app.post(
-  "/webhook",
-  bodyParser.raw({ type: "*/*" }),
-  async (req, res) => {
-    try {
-      const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
+    if (expectedSignature !== receivedSignature) {
+      return res.status(400).send("Invalid signature");
+    }
 
-      const receivedSignature = req.headers["x-razorpay-signature"];
-      const expectedSignature = crypto
-        .createHmac("sha256", secret)
-        .update(req.body)
-        .digest("hex");
+    const event = JSON.parse(req.body.toString());
 
-      if (receivedSignature !== expectedSignature) {
-        console.error("❌ Invalid webhook signature");
-        return res.status(400).send("Invalid signature");
-      }
+    if (event.event === "payment_link.paid") {
+      const payment = event.payload.payment.entity;
+      const { uid, cartItemIds } = payment.notes;
 
-      const event = JSON.parse(req.body.toString());
+      const ids = JSON.parse(cartItemIds || "[]");
 
-      if (event.event === "payment_link.paid") {
-        const payment = event.payload.payment.entity;
-        const notes = payment.notes;
-
-        const uid = notes.uid;
-        const cartItemIds = JSON.parse(notes.cartItemIds || "[]");
-        const paymentLinkId = payment.payment_link_id;
-
-        // 🔥 Remove cart items
-        for (const id of cartItemIds) {
-          await db
-            .collection("users")
-            .doc(uid)
-            .collection("cart")
-            .doc(id)
-            .delete();
-        }
-
-        // 🔥 Mark order as PAID
-        const orderSnap = await db
+      for (const id of ids) {
+        await db
           .collection("users")
           .doc(uid)
-          .collection("orders")
-          .where("paymentLinkId", "==", paymentLinkId)
-          .limit(1)
-          .get();
-
-        if (!orderSnap.empty) {
-          await orderSnap.docs[0].ref.update({
-            paymentStatus: "PAID",
-            razorpayPaymentId: payment.id,
-            paidAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
-        }
+          .collection("cart")
+          .doc(id)
+          .delete();
       }
 
-      res.json({ status: "ok" });
-    } catch (err) {
-      console.error("Webhook error:", err);
-      res.status(500).send("Webhook error");
+      const orders = await db
+        .collection("users")
+        .doc(uid)
+        .collection("orders")
+        .where("paymentStatus", "==", "PENDING")
+        .orderBy("createdAt", "desc")
+        .limit(1)
+        .get();
+
+      if (!orders.empty) {
+        await orders.docs[0].ref.update({
+          paymentStatus: "PAID",
+          razorpayPaymentId: payment.id,
+          paidAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
     }
+
+    res.json({ status: "ok" });
+  } catch (err) {
+    console.error("Webhook error:", err);
+    res.status(500).send("Webhook error");
   }
-);
+});
 
-/* ================= SERVER ================= */
-
+/* ---------- SERVER ---------- */
 const PORT = process.env.PORT;
-
 app.listen(PORT, () => {
-  console.log("✅ Server running on port", PORT);
+  console.log("Server running on port", PORT);
 });
