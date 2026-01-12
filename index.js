@@ -43,6 +43,7 @@ const razorpay = new Razorpay({
 /* ================= CREATE PAYMENT LINK ================= */
 
 app.post("/create-payment-link", async (req, res) => {
+   console.log("🔥 Payment request received", req.body);
   try {
     const { amount, email, uid, cartItemIds, address, items } = req.body;
 
@@ -151,7 +152,8 @@ app.post(
 
 /* ================= SERVER ================= */
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT;
+
 app.listen(PORT, () => {
   console.log("✅ Server running on port", PORT);
 });
