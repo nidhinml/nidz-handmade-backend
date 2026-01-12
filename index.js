@@ -17,6 +17,11 @@ admin.initializeApp({
 const db = admin.firestore();
 
 /* ---------- APP SETUP ---------- */
+
+app.get("/", (req, res) => {
+  res.status(200).send("Nidz Handmade Backend is running");
+});
+
 const app = express();
 app.use(cors());
 app.use(express.json());
