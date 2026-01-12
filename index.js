@@ -6,6 +6,7 @@ const bodyParser = require("body-parser");
 const admin = require("firebase-admin");
 
 /* ---------------- FIREBASE ADMIN ---------------- */
+
 const serviceAccount = JSON.parse(
   Buffer.from(
     process.env.FIREBASE_SERVICE_ACCOUNT,
@@ -16,6 +17,7 @@ const serviceAccount = JSON.parse(
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
+
 
 const db = admin.firestore();
 
