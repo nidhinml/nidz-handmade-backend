@@ -1,141 +1,79 @@
+/**
+ * ============================================================
+ * MINIMAL EXPRESS SERVER (RAILWAY DEBUG MODE)
+ * ============================================================
+ * Purpose:
+ * - Verify Railway container starts
+ * - Verify HTTP networking works
+ * - Avoid crashes
+ * ============================================================
+ */
+
+console.log("BOOTING APP...");
+
+// -------- SAFETY HANDLERS --------
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION:", err);
+});
+
+process.on("unhandledRejection", (err) => {
+  console.error("UNHANDLED PROMISE:", err);
+});
+
+// -------- EXPRESS SETUP --------
 const express = require("express");
+const app = express();
+
+// -------- TEST ROUTES --------
+app.get("/", (req, res) => {
+  res.status(200).send("OK - Railway server is running");
+});
+
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "healthy" });
+});
+
+// -------- PORT (RAILWAY REQUIRED) --------
+const PORT = process.env.PORT || 8080;
+
+// IMPORTANT: bind to 0.0.0.0
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`LISTENING ON PORT ${PORT}`);
+});
+
+/**
+ * ============================================================
+ * ALL CODE BELOW IS COMMENTED — DO NOT ENABLE YET
+ * ============================================================
+ */
+
+/*
 const Razorpay = require("razorpay");
 const cors = require("cors");
 const crypto = require("crypto");
 const bodyParser = require("body-parser");
 const admin = require("firebase-admin");
 
-/* ---------------- FIREBASE ADMIN ---------------- */
 admin.initializeApp({
   credential: admin.credential.applicationDefault(),
 });
 
 const db = admin.firestore();
 
-/* ---------------- APP ---------------- */
-const app = express();
-
-/* ✅ NORMAL JSON ROUTES */
 app.use(cors());
 app.use(express.json());
+app.use("/webhook", bodyParser.raw({ type: "*" }));
 
-/* ✅ HEALTH CHECK (VERY IMPORTANT) */
-app.get("/", (req, res) => {
-  res.status(200).send("Nidz Handmade Backend is running");
-});
-
-/* ---------------- RAZORPAY ---------------- */
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-/* ---------------- CREATE PAYMENT LINK ---------------- */
 app.post("/create-payment-link", async (req, res) => {
-  try {
-    const { amount, email, uid, cartItemIds, address, items } = req.body;
-
-    if (!amount || !uid || !cartItemIds || cartItemIds.length === 0) {
-      return res.status(400).json({ error: "Invalid request data" });
-    }
-
-    const paymentLink = await razorpay.paymentLink.create({
-      amount: amount * 100,
-      currency: "INR",
-      description: "Nidz Handmade Products",
-      customer: { email },
-      notes: {
-        uid,
-        cartItemIds: JSON.stringify(cartItemIds),
-      },
-      notify: { email: true },
-    });
-
-    await db
-      .collection("users")
-      .doc(uid)
-      .collection("orders")
-      .add({
-        items,
-        address,
-        totalAmount: amount,
-        paymentStatus: "PENDING",
-        paymentLinkId: paymentLink.id,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-    res.json({ url: paymentLink.short_url });
-  } catch (err) {
-    console.error("Payment link error:", err);
-    res.status(500).json({ error: "Payment link creation failed" });
-  }
+  res.json({ message: "Payment disabled (debug mode)" });
 });
 
-/* ---------------- WEBHOOK (RAW BODY ONLY HERE) ---------------- */
-app.post(
-  "/webhook",
-  bodyParser.raw({ type: "*/*" }),
-  async (req, res) => {
-    try {
-      const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
-
-      const receivedSignature = req.headers["x-razorpay-signature"];
-      const expectedSignature = crypto
-        .createHmac("sha256", secret)
-        .update(req.body)
-        .digest("hex");
-
-      if (receivedSignature !== expectedSignature) {
-        return res.status(400).send("Invalid signature");
-      }
-
-      const event = JSON.parse(req.body.toString());
-
-      if (event.event === "payment_link.paid") {
-        const payment = event.payload.payment.entity;
-        const notes = payment.notes;
-
-        const uid = notes.uid;
-        const cartItemIds = JSON.parse(notes.cartItemIds || "[]");
-
-        for (const id of cartItemIds) {
-          await db
-            .collection("users")
-            .doc(uid)
-            .collection("cart")
-            .doc(id)
-            .delete();
-        }
-
-        const snap = await db
-          .collection("users")
-          .doc(uid)
-          .collection("orders")
-          .where("paymentStatus", "==", "PENDING")
-          .orderBy("createdAt", "desc")
-          .limit(1)
-          .get();
-
-        if (!snap.empty) {
-          await snap.docs[0].ref.update({
-            paymentStatus: "PAID",
-            razorpayPaymentId: payment.id,
-            paidAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
-        }
-      }
-
-      res.json({ status: "ok" });
-    } catch (err) {
-      console.error("Webhook error:", err);
-      res.status(500).send("Webhook failed");
-    }
-  }
-);
-
-/* ---------------- SERVER ---------------- */
-const PORT = process.env.PORT || 8080;
-
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`✅ Server running on port ${PORT}`);
+app.post("/webhook", async (req, res) => {
+  res.json({ status: "Webhook disabled (debug mode)" });
 });
+*/
