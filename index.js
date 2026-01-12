@@ -73,6 +73,75 @@ app.post("/razorpay-webhook", express.raw({ type: "*/*" }), (req, res) => {
   res.status(200).send("OK");
 });
 
+app.post("/create-payment-link", async (req, res) => {
+  const { amount, email, uid, cartItemIds } = req.body;
+
+  const paymentLink = await razorpay.paymentLink.create({
+    amount: amount * 100,
+    currency: "INR",
+    description: "Nidz Handmade Products",
+    customer: { email },
+    notes: {
+      uid,
+      cartItemIds: JSON.stringify(cartItemIds), // 🔥 STORE HERE
+    },
+  });
+
+  res.json({ url: paymentLink.short_url });
+});
+
+app.post("/webhook", bodyParser.raw({ type: "application/json" }), async (req, res) => {
+  const crypto = require("crypto");
+
+  const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
+
+  const expectedSignature = crypto
+    .createHmac("sha256", secret)
+    .update(req.body)
+    .digest("hex");
+
+  const receivedSignature = req.headers["x-razorpay-signature"];
+
+  if (expectedSignature !== receivedSignature) {
+    return res.status(400).send("Invalid signature");
+  }
+
+  const event = JSON.parse(req.body);
+
+  if (event.event === "payment.captured") {
+    const notes = event.payload.payment.entity.notes;
+    const uid = notes.uid;
+    const cartItemIds = JSON.parse(notes.cartItemIds);
+
+    const db = admin.firestore();
+
+    // 🔥 DELETE ONLY PAID ITEMS
+    for (const id of cartItemIds) {
+      await db
+        .collection("users")
+        .doc(uid)
+        .collection("cart")
+        .doc(id)
+        .delete();
+    }
+
+    // 🔥 CREATE ORDER
+    await db
+      .collection("users")
+      .doc(uid)
+      .collection("orders")
+      .add({
+        amount: event.payload.payment.entity.amount / 100,
+        paymentId: event.payload.payment.entity.id,
+        status: "PAID",
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+  }
+
+  res.json({ status: "ok" });
+});
+
+
 
 app.listen(5000, () => {
   console.log("Server running on port 5000");
