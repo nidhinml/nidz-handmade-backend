@@ -21,9 +21,8 @@ const app = express();
 app.use(cors());
 
 /*
- ⚠️ VERY IMPORTANT ORDER
- - webhook MUST receive raw body
- - json middleware AFTER webhook
+ ⚠️ VERY IMPORTANT
+ Webhook MUST receive RAW body
 */
 app.use("/webhook", bodyParser.raw({ type: "*/*" }));
 app.use(express.json());
@@ -60,7 +59,7 @@ app.post("/create-payment-link", async (req, res) => {
       notify: { email: true },
     });
 
-    /* 🔥 CREATE ORDER (PENDING) */
+    /* 🔥 USER ORDER (PENDING) */
     await db
       .collection("users")
       .doc(uid)
@@ -70,9 +69,20 @@ app.post("/create-payment-link", async (req, res) => {
         address,
         totalAmount: amount,
         paymentStatus: "PENDING",
-        paymentLinkId: paymentLink.id, // ✅ MUST MATCH WEBHOOK
+        paymentLinkId: paymentLink.id,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
       });
+
+    /* 🔥 ADMIN ORDER (PENDING) */
+    await db.collection("admin_orders").add({
+      uid,
+      items,
+      address,
+      totalAmount: amount,
+      paymentStatus: "PENDING",
+      paymentLinkId: paymentLink.id,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
 
     res.json({ url: paymentLink.short_url });
   } catch (err) {
@@ -100,7 +110,9 @@ app.post("/webhook", async (req, res) => {
     const event = JSON.parse(req.body.toString());
     const eventType = event.event;
 
-    /* ✅ HANDLE BOTH EVENTS */
+    console.log("📩 Webhook Event:", eventType);
+
+    /* ✅ HANDLE SUCCESS EVENTS */
     if (
       eventType === "payment_link.paid" ||
       eventType === "payment.captured"
@@ -110,14 +122,12 @@ app.post("/webhook", async (req, res) => {
         event.payload.payment_link?.entity;
 
       if (!payment || !payment.notes) {
-        console.log("ℹ️ No payment notes, skipping");
         return res.json({ status: "ignored" });
       }
 
       const uid = payment.notes.uid;
       const cartItemIds = JSON.parse(payment.notes.cartItemIds || "[]");
 
-      /* 🔥 CORRECT paymentLinkId SOURCE */
       const paymentLinkId =
         event.payload.payment_link?.entity?.id ||
         payment.payment_link_id;
@@ -132,8 +142,8 @@ app.post("/webhook", async (req, res) => {
           .delete();
       }
 
-      /* 🔥 UPDATE EXACT ORDER */
-      const ordersSnap = await db
+      /* 🔥 UPDATE USER ORDER */
+      const userOrders = await db
         .collection("users")
         .doc(uid)
         .collection("orders")
@@ -141,8 +151,23 @@ app.post("/webhook", async (req, res) => {
         .limit(1)
         .get();
 
-      if (!ordersSnap.empty) {
-        await ordersSnap.docs[0].ref.update({
+      if (!userOrders.empty) {
+        await userOrders.docs[0].ref.update({
+          paymentStatus: "PAID",
+          razorpayPaymentId: payment.id,
+          paidAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+
+      /* 🔥 UPDATE ADMIN ORDER */
+      const adminOrders = await db
+        .collection("admin_orders")
+        .where("paymentLinkId", "==", paymentLinkId)
+        .limit(1)
+        .get();
+
+      if (!adminOrders.empty) {
+        await adminOrders.docs[0].ref.update({
           paymentStatus: "PAID",
           razorpayPaymentId: payment.id,
           paidAt: admin.firestore.FieldValue.serverTimestamp(),
