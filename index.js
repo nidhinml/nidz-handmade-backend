@@ -5,7 +5,7 @@ const crypto = require("crypto");
 const bodyParser = require("body-parser");
 const admin = require("firebase-admin");
 
-/* ---------------- FIREBASE ADMIN (FIXED) ---------------- */
+/* ---------------- FIREBASE ADMIN ---------------- */
 const serviceAccount = JSON.parse(
   Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT, "base64").toString("utf8")
 );
@@ -21,10 +21,16 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-/* ---------------- HEALTH CHECK (CRITICAL) ---------------- */
+/* ---------------- RAILWAY HEALTH CHECK (CRITICAL) ---------------- */
 app.get("/", (req, res) => {
-  res.send("Nidz Handmade Backend is running ✅");
+  res.status(200).send("Nidz Handmade Backend is running ✅");
 });
+
+app.post("/", (req, res) => {
+  res.status(200).json({ status: "ok" });
+});
+
+app.get("/favicon.ico", (req, res) => res.status(204).end());
 
 /* ---------------- RAZORPAY ---------------- */
 const razorpay = new Razorpay({
@@ -73,7 +79,7 @@ app.post("/create-payment-link", async (req, res) => {
   }
 });
 
-/* ---------------- WEBHOOK (RAW BODY ONLY HERE) ---------------- */
+/* ---------------- WEBHOOK (RAW BODY ONLY) ---------------- */
 app.post(
   "/webhook",
   bodyParser.raw({ type: "*/*" }),
