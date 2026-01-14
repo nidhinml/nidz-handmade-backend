@@ -19,9 +19,16 @@ const db = admin.firestore();
 /* ================= APP ================= */
 const app = express();
 app.use(cors());
+
+/*
+ ⚠️ VERY IMPORTANT ORDER
+ - webhook MUST receive raw body
+ - json middleware AFTER webhook
+*/
+app.use("/webhook", bodyParser.raw({ type: "*/*" }));
 app.use(express.json());
 
-/* Health check */
+/* ================= HEALTH CHECK ================= */
 app.get("/", (req, res) => {
   res.send("Backend OK ✅");
 });
@@ -53,15 +60,19 @@ app.post("/create-payment-link", async (req, res) => {
       notify: { email: true },
     });
 
-    /* 🔥 CREATE ORDER WITH paymentLinkId */
-    await db.collection("users").doc(uid).collection("orders").add({
-      items,
-      address,
-      totalAmount: amount,
-      paymentStatus: "PENDING",
-      paymentLinkId: paymentLink.id, // ✅ IMPORTANT
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
+    /* 🔥 CREATE ORDER (PENDING) */
+    await db
+      .collection("users")
+      .doc(uid)
+      .collection("orders")
+      .add({
+        items,
+        address,
+        totalAmount: amount,
+        paymentStatus: "PENDING",
+        paymentLinkId: paymentLink.id, // ✅ MUST MATCH WEBHOOK
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
 
     res.json({ url: paymentLink.short_url });
   } catch (err) {
@@ -71,69 +82,80 @@ app.post("/create-payment-link", async (req, res) => {
 });
 
 /* ================= WEBHOOK ================= */
-app.post(
-  "/webhook",
-  bodyParser.raw({ type: "*/*" }),
-  async (req, res) => {
-    try {
-      const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
-      const receivedSignature = req.headers["x-razorpay-signature"];
+app.post("/webhook", async (req, res) => {
+  try {
+    const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
+    const receivedSignature = req.headers["x-razorpay-signature"];
 
-      const expectedSignature = crypto
-        .createHmac("sha256", secret)
-        .update(req.body)
-        .digest("hex");
+    const expectedSignature = crypto
+      .createHmac("sha256", secret)
+      .update(req.body)
+      .digest("hex");
 
-      if (receivedSignature !== expectedSignature) {
-        return res.status(400).send("Invalid signature");
+    if (receivedSignature !== expectedSignature) {
+      console.error("❌ Invalid webhook signature");
+      return res.status(400).send("Invalid signature");
+    }
+
+    const event = JSON.parse(req.body.toString());
+    const eventType = event.event;
+
+    /* ✅ HANDLE BOTH EVENTS */
+    if (
+      eventType === "payment_link.paid" ||
+      eventType === "payment.captured"
+    ) {
+      const payment =
+        event.payload.payment?.entity ||
+        event.payload.payment_link?.entity;
+
+      if (!payment || !payment.notes) {
+        console.log("ℹ️ No payment notes, skipping");
+        return res.json({ status: "ignored" });
       }
 
-      const event = JSON.parse(req.body.toString());
+      const uid = payment.notes.uid;
+      const cartItemIds = JSON.parse(payment.notes.cartItemIds || "[]");
 
-      /* ✅ PAYMENT LINK PAID */
-      if (event.event === "payment_link.paid") {
-        const payment = event.payload.payment.entity;
-        const notes = payment.notes;
+      /* 🔥 CORRECT paymentLinkId SOURCE */
+      const paymentLinkId =
+        event.payload.payment_link?.entity?.id ||
+        payment.payment_link_id;
 
-        const uid = notes.uid;
-        const cartItemIds = JSON.parse(notes.cartItemIds || "[]");
-        const paymentLinkId = event.payload.payment_link.entity.id;
-
-        /* 🔥 DELETE CART ITEMS */
-        for (const id of cartItemIds) {
-          await db
-            .collection("users")
-            .doc(uid)
-            .collection("cart")
-            .doc(id)
-            .delete();
-        }
-
-        /* 🔥 UPDATE EXACT ORDER */
-        const ordersSnap = await db
+      /* 🔥 DELETE CART ITEMS */
+      for (const id of cartItemIds) {
+        await db
           .collection("users")
           .doc(uid)
-          .collection("orders")
-          .where("paymentLinkId", "==", paymentLinkId)
-          .limit(1)
-          .get();
-
-        if (!ordersSnap.empty) {
-          await ordersSnap.docs[0].ref.update({
-            paymentStatus: "PAID",
-            razorpayPaymentId: payment.id,
-            paidAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
-        }
+          .collection("cart")
+          .doc(id)
+          .delete();
       }
 
-      res.json({ status: "ok" });
-    } catch (err) {
-      console.error("Webhook error:", err);
-      res.status(500).send("Webhook error");
+      /* 🔥 UPDATE EXACT ORDER */
+      const ordersSnap = await db
+        .collection("users")
+        .doc(uid)
+        .collection("orders")
+        .where("paymentLinkId", "==", paymentLinkId)
+        .limit(1)
+        .get();
+
+      if (!ordersSnap.empty) {
+        await ordersSnap.docs[0].ref.update({
+          paymentStatus: "PAID",
+          razorpayPaymentId: payment.id,
+          paidAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
     }
+
+    res.json({ status: "ok" });
+  } catch (err) {
+    console.error("Webhook error:", err);
+    res.status(500).send("Webhook error");
   }
-);
+});
 
 /* ================= SERVER ================= */
 const PORT = process.env.PORT || 8080;
