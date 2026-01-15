@@ -59,7 +59,7 @@ app.post("/create-payment-link", async (req, res) => {
       notify: { email: true },
     });
 
-    /* 🔥 USER ORDER (PENDING) */
+    /* 🔥 CREATE USER ORDER (PENDING) */
     await db
       .collection("users")
       .doc(uid)
@@ -69,20 +69,10 @@ app.post("/create-payment-link", async (req, res) => {
         address,
         totalAmount: amount,
         paymentStatus: "PENDING",
+        orderStatus: "PENDING", // ✅ DELIVERY STATUS
         paymentLinkId: paymentLink.id,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
       });
-
-    /* 🔥 ADMIN ORDER (PENDING) */
-    await db.collection("admin_orders").add({
-      uid,
-      items,
-      address,
-      totalAmount: amount,
-      paymentStatus: "PENDING",
-      paymentLinkId: paymentLink.id,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
 
     res.json({ url: paymentLink.short_url });
   } catch (err) {
@@ -110,9 +100,8 @@ app.post("/webhook", async (req, res) => {
     const event = JSON.parse(req.body.toString());
     const eventType = event.event;
 
-    console.log("📩 Webhook Event:", eventType);
+    console.log("📩 Webhook:", eventType);
 
-    /* ✅ HANDLE SUCCESS EVENTS */
     if (
       eventType === "payment_link.paid" ||
       eventType === "payment.captured"
@@ -126,13 +115,13 @@ app.post("/webhook", async (req, res) => {
       }
 
       const uid = payment.notes.uid;
-      const cartItemIds = JSON.parse(payment.notes.cartItemIds || "[]");
+      const cartItemIds = JSON.parse(payment.notes.cartItemIds || []);
 
       const paymentLinkId =
         event.payload.payment_link?.entity?.id ||
         payment.payment_link_id;
 
-      /* 🔥 DELETE CART ITEMS */
+      /* 🔥 CLEAR CART */
       for (const id of cartItemIds) {
         await db
           .collection("users")
@@ -143,7 +132,7 @@ app.post("/webhook", async (req, res) => {
       }
 
       /* 🔥 UPDATE USER ORDER */
-      const userOrders = await db
+      const ordersSnap = await db
         .collection("users")
         .doc(uid)
         .collection("orders")
@@ -151,25 +140,10 @@ app.post("/webhook", async (req, res) => {
         .limit(1)
         .get();
 
-      if (!userOrders.empty) {
-        await userOrders.docs[0].ref.update({
+      if (!ordersSnap.empty) {
+        await ordersSnap.docs[0].ref.update({
           paymentStatus: "PAID",
-          razorpayPaymentId: payment.id,
-          paidAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-      }
-
-      /* 🔥 UPDATE ADMIN ORDER */
-      const adminOrders = await db
-        .collection("admin_orders")
-        .where("paymentLinkId", "==", paymentLinkId)
-        .limit(1)
-        .get();
-
-      if (!adminOrders.empty) {
-        await adminOrders.docs[0].ref.update({
-          paymentStatus: "PAID",
-          orderStatus: "CONFIRMED", 
+          orderStatus: "CONFIRMED",
           razorpayPaymentId: payment.id,
           paidAt: admin.firestore.FieldValue.serverTimestamp(),
         });
