@@ -169,6 +169,7 @@ app.post("/webhook", async (req, res) => {
       if (!adminOrders.empty) {
         await adminOrders.docs[0].ref.update({
           paymentStatus: "PAID",
+          orderStatus: "CONFIRMED", 
           razorpayPaymentId: payment.id,
           paidAt: admin.firestore.FieldValue.serverTimestamp(),
         });
